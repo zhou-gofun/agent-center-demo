@@ -1,0 +1,32 @@
+# Skill 定义配置
+
+skills:
+  semantic-search:
+    name: semantic-search
+    description: 向量语义搜索，在知识库中检索相关内容
+    allowed-tools: [Read]
+
+  tool-matcher:
+    name: tool-matcher
+    description: 根据分析需求匹配最合适的统计工具
+    allowed-tools: [Read, Grep]
+
+  data-analyzer:
+    name: data-analyzer
+    description: 数据分析执行
+    allowed-tools: []
+
+  literature-matcher:
+    name: literature-matcher
+    description: 文献匹配
+    allowed-tools: [Read]
+
+  pipeline-decision:
+    name: pipeline-decision
+    description: 流程决策
+    allowed-tools: []
+
+  question-generator:
+    name: question-generator
+    description: 问题生成
+    allowed-tools: []
