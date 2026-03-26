@@ -132,7 +132,8 @@ To use a skill, format your response as:
                 "agent": agent_name,
                 "response": response,
                 "context": context.to_dict(),
-                "tasks_executed": len(results)
+                "tasks_executed": len(results),
+                "task_results": results
             }
 
         except Exception as e:
@@ -270,6 +271,68 @@ To use a skill, format your response as:
 
         return {"response": response}
 
+    def execute_with_pause(
+        self,
+        agent_name: str,
+        input_data: Dict,
+        context: ExecutionContext
+    ) -> Dict:
+        """
+        执行 agent，支持在需要时暂停等待用户输入
+
+        Args:
+            agent_name: agent 名称
+            input_data: 输入数据
+            context: 执行上下文
+
+        Returns:
+            执行结果，包含是否需要等待用户输入的标志
+        """
+        result = self.execute_agent(agent_name, input_data, context)
+
+        # 检查是否有 ask_user 任务
+        task_results = result.get("task_results", [])
+        for tr in task_results:
+            if tr.get("type") == "ask_user" and tr.get("needs_input"):
+                result["needs_user_input"] = True
+                result["pending_question"] = tr.get("question")
+                result["question_reasoning"] = tr.get("reasoning", "")
+                break
+
+        return result
+
+    def resume_after_user_input(
+        self,
+        agent_name: str,
+        user_input: str,
+        context: ExecutionContext,
+        previous_question: str = ""
+    ) -> Dict:
+        """
+        在用户输入后恢复执行
+
+        Args:
+            agent_name: agent 名称
+            user_input: 用户输入
+            context: 执行上下文
+            previous_question: 之前的问题
+
+        Returns:
+            执行结果
+        """
+        # 将用户输入和之前的问题组合
+        if previous_question:
+            combined_input = f"Previous question: {previous_question}\nUser answer: {user_input}"
+        else:
+            combined_input = user_input
+
+        # 添加到上下文
+        context.add_message("user", combined_input)
+
+        # 继续执行
+        input_data = {"query": combined_input}
+        return self.execute_agent(agent_name, input_data, context)
+
     def _delegate_to_agent(
         self,
         task_data: Dict,
@@ -331,34 +394,63 @@ To use a skill, format your response as:
         """
         # 构建结果上下文
         results_text = []
+        has_error = False
+
         for result in task_results:
             if result["type"] == "skill":
                 skill_result = result["result"]
                 if "error" not in skill_result:
+                    # 成功的 skill 结果
                     results_text.append(
                         f"## Skill Result: {result['name']}\n"
                         f"```json\n{json.dumps(skill_result, ensure_ascii=False, indent=2)}\n```"
                     )
+                else:
+                    # Skill 执行失败
+                    has_error = True
+                    error_msg = skill_result.get("error", "Unknown error")
+                    logger.warning(f"Skill {result['name']} failed: {error_msg}")
+                    # 添加错误信息，让 LLM 知道
+                    results_text.append(
+                        f"## Skill {result['name']} unavailable\n"
+                        f"Note: {error_msg}\n"
+                    )
             elif result["type"] == "agent":
                 agent_result = result["result"]
+                response_text = agent_result.get('response', '')
                 results_text.append(
                     f"## Agent Result: {result['name']}\n"
-                    f"{agent_result.get('response', '')[:500]}"
+                    f"{response_text[:1000]}"
                 )
             elif result["type"] == "ask_user":
                 # 有追问，直接返回追问内容
                 question = result["question"]
                 reasoning = result.get("reasoning", "")
                 return f"{reasoning}\n\n{question}" if reasoning else question
+            elif result["type"] == "error":
+                has_error = True
+                results_text.append(f"## Error\n{result.get('error', 'Unknown error')}")
 
+        # 如果没有有效结果，返回原始响应
         if not results_text:
             return original_response
 
-        # 让 LLM 基于结果生成响应
+        # 构建提示，让 LLM 基于结果生成响应
         prompt_messages = list(messages)
+
+        # 如果有错误，添加说明
+        if has_error:
+            instruction = (
+                "Some skills were unavailable. Please provide a helpful response to the user "
+                "based on your knowledge, even without the skill results. You can suggest "
+                "appropriate statistical methods and provide code examples."
+            )
+        else:
+            instruction = "Based on the skill/agent execution results above, please provide your response to the user."
+
         prompt_messages.append({
             "role": "user",
-            "content": "Based on the skill/agent execution results above, please provide your response to the user."
+            "content": f"{instruction}\n\n## Execution Results:\n" + "\n".join(results_text)
         })
 
         try:

@@ -43,3 +43,26 @@ Consider the following when selecting tools:
 - Analysis goals (comparison, prediction, description, causal inference)
 - Sample size and statistical power considerations
 - Data quality issues (missing data, outliers)
+
+## When Skills Are Unavailable
+
+If the semantic-search or tool-matcher skills fail (e.g., vector database unavailable):
+- Provide analysis recommendations based on your statistical knowledge
+- Suggest appropriate methods and tools for the user's scenario
+- Provide code examples when relevant
+- Explain the reasoning behind your recommendations
+
+## Survival Analysis Pipeline (Example)
+
+For survival analysis with time (days) and status (1=event, 0=censored):
+```json
+{
+  "pipeline": [
+    {"idname": "survival_summary", "toolid": 1, "toolname": "Survival Data Summary", "order": 1},
+    {"idname": "kaplan_meier", "toolid": 2, "toolname": "Kaplan-Meier Curve", "order": 2},
+    {"idname": "logrank_test", "toolid": 3, "toolname": "Log-Rank Test", "order": 3},
+    {"idname": "cox_regression", "toolid": 4, "toolname": "Cox Regression", "order": 4}
+  ],
+  "reasoning": "For survival analysis, first summarize the data, then visualize survival curves, compare groups if applicable, and build a multivariate model."
+}
+```

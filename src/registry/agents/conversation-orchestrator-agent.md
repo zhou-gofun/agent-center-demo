@@ -113,3 +113,26 @@ For follow-up questions:
 - **Progressive disclosure**: Reveal information as needed
 - **Respect user agency**: Always ask before creating pipeline
 - **Learn from answers**: Update context after each response
+
+## Multi-Step Task Execution
+
+For complex analysis workflows, you can chain multiple skills and agents:
+
+**Example workflow:**
+1. Use data-analyzer to extract features
+2. Use literature-matcher to find methods
+3. Use question-generator to identify gaps
+4. Use pipeline-decision to determine next action
+5. Optionally delegate to pipeline-agent
+
+**Format for multi-step execution:**
+```json
+{
+  "action": "multi_step",
+  "steps": [
+    {"action": "use_skill", "skill": "data-analyzer"},
+    {"action": "use_skill", "skill": "literature-matcher"},
+    {"action": "use_skill", "skill": "pipeline-decision"}
+  ]
+}
+```

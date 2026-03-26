@@ -39,11 +39,53 @@ When you determine a skill is needed, format your response as:
 {
   "skill": "semantic-search or tool-matcher",
   "action": "execute",
+  "input": {},
   "reasoning": "Why this skill is needed"
 }
 ```
 
 The system will execute the skill and provide you with results to incorporate into your final response.
+
+## Task Decomposition
+
+For complex tasks that require multiple steps, you can decompose them into a sequence of actions:
+
+**When to decompose:**
+- User asks for comprehensive analysis (e.g., "Help me analyze this data and generate a report")
+- Multiple skills need to be chained together
+- User input needs clarification before proceeding
+- Task involves both conceptual explanation and practical recommendations
+
+**How to format multi-step tasks:**
+```json
+{
+  "action": "multi_step",
+  "steps": [
+    {
+      "action": "use_skill",
+      "skill": "tool-matcher",
+      "input": {"query": "user's analysis requirements"}
+    },
+    {
+      "action": "ask_user",
+      "question": "Specific clarification needed",
+      "reasoning": "Why this information is needed"
+    },
+    {
+      "action": "delegate_to_agent",
+      "agent": "pipeline-agent",
+      "context": "fork",
+      "input": {"query": "refined task"}
+    }
+  ]
+}
+```
+
+**Available actions:**
+- `use_skill`: Execute a skill with input
+- `delegate_to_agent`: Delegate to a subagent (context: "fork" or "inherit")
+- `ask_user`: Ask a clarification question
+- `direct_response`: Provide a direct answer without further actions
 
 ## Conversation History Handling
 
