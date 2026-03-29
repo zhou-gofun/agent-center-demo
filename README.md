@@ -4,10 +4,12 @@
 
 ## 特性
 
+- **Skill 自动发现**：添加新 skill 后自动生效，无需手动配置
 - **动态管理**：运行时创建/更新/删除 agents 和 skills
 - **远程调用**：通过 Flask API 触发 agent/skill 执行
 - **LLM 集成**：使用 Qwen API (OpenAI 兼容模式)
 - **知识库集成**：向量语义搜索（ChromaDB）
+- **通用脚本执行**：支持 Python 脚本技能，无需模块导入
 
 ## 目录结构
 
@@ -20,21 +22,33 @@
 │   │   ├── llm_client.py            # Qwen LLM 客户端
 │   │   ├── agent_manager.py         # Agent 管理器
 │   │   ├── skill_manager.py         # Skill 管理器
-│   │   └── executor.py              # 执行引擎
+│   │   ├── executor.py              # 执行引擎
+│   │   ├── registry_scanner.py      # 注册表扫描器（新增）
+│   │   ├── universal_executor.py    # 通用脚本执行器（新增）
+│   │   ├── execution_orchestrator.py# 执行编排器
+│   │   └── python_script_executor.py# Python 脚本执行器
 │   ├── vector_db/                   # 向量数据库层
 │   │   ├── chroma_store.py          # ChromaDB 实现
 │   │   ├── embeddings.py            # Embedding 生成
 │   │   └── data_loader.py           # Excel 数据加载
 │   ├── registry/                    # Agent/Skill 注册表
-│   │   ├── agents/                  # 运行时 agent 文件
-│   │   └── skills/                  # 运行时 skill 文件
+│   │   ├── agents/                  # Agent 定义 (.md 文件)
+│   │   │   ├── routing-agent.md
+│   │   │   ├── general-purpose-agent.md
+│   │   │   ├── pipeline-agent.md
+│   │   │   └── data-analyst-agent.md
+│   │   └── skills/                  # Skill 定义 (SKILL.md + 脚本)
+│   │       ├── semantic-search/     # 语义搜索
+│   │       ├── tool-matcher/        # 工具匹配
+│   │       ├── pipeline-decision/   # 流程决策
+│   │       ├── question-generator/  # 问题生成
+│   │       ├── literature-matcher/  # 文献匹配
+│   │       ├── data-analyzer/       # 数据分析
+│   │       └── weather-query/       # 天气查询（新增）
 │   ├── api/                         # API 层
 │   │   └── routes.py                # REST API 端点
 │   └── utils/
 │       └── logger.py                # 日志工具
-├── config/                          # 配置定义
-│   ├── agents.yaml                  # Agent 定义
-│   └── skills.yaml                  # Skill 定义
 ├── data/                            # 数据目录
 │   └── vector_store/                # ChromaDB 持久化
 ├── requirements.txt
@@ -56,12 +70,25 @@ cp .env.example .env
 
 ```bash
 cd /mnt/d/temp/proj/agent_center
-python -m src.main
+python src/main.py
 ```
 
-服务将在 `http://0.0.0.0:8000` 启动。
+服务将在 `http://0.0.0.0:5000` 启动。
 
 ## API 接口
+
+### 智能聊天（路由模式）
+
+```bash
+POST /v1/chat
+Content-Type: application/json
+
+{
+  "query": "今天成都的天气怎么样？"
+}
+```
+
+系统会自动路由到合适的 agent 处理。
 
 ### Agent 执行
 
@@ -107,43 +134,72 @@ Content-Type: application/json
 # 列出所有 agents
 GET /v1/registry/agents
 
-# 注册新 agent
-POST /v1/registry/agents
-{
-  "name": "new-agent",
-  "config": {...}
-}
-
 # 列出所有 skills
 GET /v1/registry/skills
+
+# 扫描注册表
+GET /v1/registry/scan
 ```
 
-## 配置文件
+## Skill 自动发现机制
 
-### Agent 定义 (`config/agents.yaml`)
+添加新 skill 只需两步：
 
-```yaml
-agents:
-  pipeline_agent:
-    name: pipeline-agent
-    description: 流程组配专家
-    tools: [Read, Grep]
-    skills: [semantic-search, tool-matcher]
-    prompt: |
-      You are a pipeline generation expert...
+### 1. 创建 Skill 目录和 SKILL.md
+
+```bash
+mkdir -p src/registry/skills/my-new-skill/scripts
 ```
 
-### Skill 定义 (`config/skills.yaml`)
+```bash
+cat > src/registry/skills/my-new-skill/SKILL.md << 'EOF'
+---
+name: my-new-skill
+description: 我的新技能描述
+execution:
+  type: script
+  handler: scripts/run.py
+  entrypoint: main
+  timeout: 30
+---
 
-```yaml
-skills:
-  semantic_search:
-    name: semantic-search
-    description: 向量语义搜索
-    allowed-tools: [Read]
-    instructions: |
-      Perform semantic search...
+技能说明文档...
+EOF
 ```
+
+### 2. 创建脚本
+
+```python
+cat > src/registry/skills/my-new-skill/scripts/run.py << 'EOF'
+def main(**kwargs):
+    return {"result": "Hello from my new skill!"}
+EOF
+```
+
+### 3. 重启应用
+
+所有 agent 将自动发现并可以使用新 skill。
+
+## 可用 Skills
+
+| Skill | 描述 | 类型 |
+|-------|------|------|
+| `semantic-search` | 向量语义搜索 | script |
+| `tool-matcher` | 统计工具匹配 | script |
+| `pipeline-decision` | 分析流程决策 | script |
+| `question-generator` | 研究问题生成 | script |
+| `literature-matcher` | 文献匹配 | script |
+| `data-analyzer` | 数据分析 | script |
+| `weather-query` | 实时天气查询 | script |
+
+## 可用 Agents
+
+| Agent | 描述 | Skills |
+|-------|------|--------|
+| `routing-agent` | 主控路由，分析意图并分发 | 自动发现所有 skills |
+| `general-purpose-agent` | 通用问答、研究任务 | 自动发现所有 skills |
+| `pipeline-agent` | 统计分析流程生成 | 自动发现所有 skills |
+| `data-analyst-agent` | 数据分析、代码生成 | 自动发现所有 skills |
 
 ## 环境变量
 
@@ -152,3 +208,4 @@ skills:
 - `FLASK_HOST`: Flask 服务地址
 - `FLASK_PORT`: Flask 服务端口
 - `VECTOR_DB_PATH`: 向量数据库存储路径
+- `DEBUG_MODE`: 调试模式开关
