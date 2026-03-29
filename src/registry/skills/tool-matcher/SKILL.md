@@ -3,6 +3,11 @@ name: tool-matcher
 description: 根据分析需求匹配最合适的统计工具
 allowed-tools: [Read, Grep]
 context: inline
+execution:
+  type: script
+  handler: scripts/match.py
+  entrypoint: match_tools
+  timeout: 30
 ---
 
 # Tool Matcher
@@ -74,7 +79,7 @@ python src/registry/skills/tool_matcher/scripts/match.py \
 Or as a module:
 
 ```python
-from src.registry.skills.tool_matcher.scripts.match import match_tools
+from registry.skills.tool_matcher.scripts.match import match_tools
 
 result = match_tools(
     query="compare treatment groups",

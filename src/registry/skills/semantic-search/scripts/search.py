@@ -34,7 +34,7 @@ def semantic_search(
         }
 
     try:
-        from src.vector_db.chroma_store import get_vector_store
+        from vector_db.chroma_store import get_vector_store
 
         db = get_vector_store()
         collections = db.list_collections()
@@ -106,12 +106,31 @@ def main():
 
     args = parser.parse_args()
 
+    # Try to read JSON input from stdin first (for skill execution)
+    stdin_data = sys.stdin.read().strip()
+    if stdin_data:
+        try:
+            input_data = json.loads(stdin_data)
+            # Check if it's the UniversalScriptExecutor format
+            if "__entrypoint__" in input_data:
+                args.query = input_data["__input__"].get("query", args.query or "")
+                args.collection = input_data["__input__"].get("collection", args.collection)
+                args.top_k = input_data["__input__"].get("top_k", args.top_k)
+            else:
+                # Direct JSON input
+                args.query = input_data.get("query", args.query or "")
+                args.collection = input_data.get("collection", args.collection)
+                args.top_k = input_data.get("top_k", args.top_k)
+        except json.JSONDecodeError:
+            # Not JSON, treat as plain text query
+            if not args.query:
+                args.query = stdin_data
+
     if not args.query:
-        # Read from stdin if no query provided
-        args.query = sys.stdin.read().strip()
+        parser.error("--query is required or provide via stdin")
 
     result = semantic_search(args.query, args.collection, args.top_k)
-    print(json.dumps(result, indent=2))
+    print(json.dumps(result, ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":

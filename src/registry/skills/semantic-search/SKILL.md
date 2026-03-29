@@ -3,6 +3,11 @@ name: semantic-search
 description: 向量语义搜索，在知识库中检索相关工具和文献
 allowed-tools: [Read]
 context: inline
+execution:
+  type: script
+  handler: scripts/search.py
+  entrypoint: semantic_search
+  timeout: 30
 ---
 
 # Semantic Search
@@ -64,7 +69,7 @@ python src/registry/skills/semantic_search/scripts/search.py \
 Or as a module:
 
 ```python
-from src.registry.skills.semantic_search.scripts.search import semantic_search
+from registry.skills.semantic_search.scripts.search import semantic_search
 
 result = semantic_search(
     query="compare treatment groups",

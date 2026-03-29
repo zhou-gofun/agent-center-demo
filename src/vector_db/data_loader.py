@@ -6,8 +6,8 @@
 import pandas as pd
 from pathlib import Path
 from typing import List, Dict, Any, Optional
-from src.config import get_config
-from src.utils.logger import get_logger
+from config import get_config
+from utils.logger import get_logger
 
 logger = get_logger(__name__)
 

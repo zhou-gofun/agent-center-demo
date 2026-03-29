@@ -3,6 +3,11 @@ name: pipeline-decision
 description: 流程决策，决定是否建议生成分析流程
 allowed-tools: []
 context: inline
+execution:
+  type: script
+  handler: scripts/decide.py
+  entrypoint: make_decision
+  timeout: 30
 ---
 
 # Pipeline Decision
@@ -100,7 +105,7 @@ python src/registry/skills/pipeline_decision/scripts/decide.py \
 Or as a module:
 
 ```python
-from src.registry.skills.pipeline_decision.scripts.decide import make_decision
+from registry.skills.pipeline_decision.scripts.decide import make_decision
 
 result = make_decision(
     data_features={"sample_size": 150, "grouping_variables": ["treatment"]},

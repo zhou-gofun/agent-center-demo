@@ -6,7 +6,7 @@ Qwen LLM 客户端
 import asyncio
 from typing import List, Dict, Any, Optional
 from openai import OpenAI, AsyncOpenAI
-from src.config import get_config
+from config import get_config
 
 
 class QwenClient:

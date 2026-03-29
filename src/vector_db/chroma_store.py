@@ -7,8 +7,8 @@ import chromadb
 from chromadb.config import Settings
 from pathlib import Path
 from typing import List, Dict, Any, Optional
-from src.config import get_config
-from src.utils.logger import get_logger
+from config import get_config
+from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
@@ -68,7 +68,7 @@ class ChromaVectorStore:
 
     def _load_existing_collections(self) -> None:
         """加载已存在的集合"""
-        from src.vector_db.embeddings import get_embedding_function
+        from vector_db.embeddings import get_embedding_function
         try:
             existing = self.client.list_collections()
             for coll in existing:

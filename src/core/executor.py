@@ -8,25 +8,27 @@ Agent/Skill 执行引擎
 - TaskParser: 任务解析
 - ExecutionOrchestrator: 执行编排
 - ConversationalLoop: 对话循环
+- RegistryScanner: 动态扫描 skills/agents
+- UniversalScriptExecutor: 通用脚本执行器
 """
 import asyncio
 import json
-import importlib.util
-import sys
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 from datetime import datetime
-from src.core.llm_client import QwenClient, AsyncQwenClient
-from src.core.agent_manager import AgentManager
-from src.core.skill_manager import SkillManager
-from src.config import get_config
-from src.utils.logger import get_logger
+from core.llm_client import QwenClient, AsyncQwenClient
+from core.agent_manager import AgentManager
+from core.skill_manager import SkillManager
+from core.universal_executor import get_universal_executor
+from core.registry_scanner import get_scanner
+from config import get_config
+from utils.logger import get_logger
 
 # 新的编排系统
-from src.core.execution_context import ExecutionContext
-from src.core.task_parser import TaskParser
-from src.core.execution_orchestrator import ExecutionOrchestrator, get_orchestrator
-from src.core.python_script_executor import PythonScriptExecutor
+from core.execution_context import ExecutionContext
+from core.task_parser import TaskParser
+from core.execution_orchestrator import ExecutionOrchestrator, get_orchestrator
+from core.python_script_executor import PythonScriptExecutor
 
 logger = get_logger(__name__)
 
@@ -88,6 +90,9 @@ class AgentExecutor:
         self.llm = llm_client or QwenClient()
         self.agent_manager = agent_manager or AgentManager()
         self.skill_manager = SkillManager()
+        self.universal_executor = get_universal_executor()
+        self.registry_scanner = get_scanner()
+        self.cfg = get_config()
 
     def _format_input(self, input_data: Dict) -> str:
         """格式化输入数据为提示文本"""
@@ -121,6 +126,7 @@ class AgentExecutor:
                     return {
                         "skill": data["skill"],
                         "action": data.get("action", "execute"),
+                        "input": data.get("input", {}),
                         "reasoning": data.get("reasoning", "")
                     }
             # 尝试直接解析 JSON
@@ -212,23 +218,41 @@ class AgentExecutor:
             # 构建系统提示
             system_prompt = agent_config["prompt"]
 
-            # 获取可用 skills（不自动执行）
+            # 获取可用 skills（支持自动发现）
             available_skills = agent_config["frontmatter"].get("skills", [])
+
+            # 如果 agent 没有配置 skills 列表，自动获取所有可用 skills
+            if not available_skills:
+                available_skills = self.registry_scanner.list_skills()
+
             if available_skills:
-                skill_list = "\n".join([f"- {s}" for s in available_skills])
+                # 构建 skills 描述（包含 name 和 description）
+                skill_descriptions = []
+                for skill_name in available_skills:
+                    skill_spec = self.registry_scanner.get_skill_spec(skill_name)
+                    if skill_spec:
+                        desc = skill_spec["frontmatter"].get("description", "")
+                        skill_descriptions.append(f"- **{skill_name}**: {desc}")
+
+                skills_section = "\n".join(skill_descriptions)
+
                 system_prompt = f"""## Available Skills
-You can request these skills when needed by using function call format:
+You have access to the following skills that you can use when needed:
 
-{skill_list}
+{skills_section}
 
-To use a skill, format your response as:
+**How to use a skill:**
+When you need to use a skill, format your response as:
 ```json
 {{
-  "skill": "{available_skills[0] if available_skills else "skill_name"}",
+  "skill": "skill_name",
   "action": "execute",
+  "input": {{...}},
   "reasoning": "Why this skill is needed"
 }}
 ```
+
+The system will execute the skill and provide you with results.
 
 {system_prompt}"""
 
@@ -244,14 +268,19 @@ To use a skill, format your response as:
             # 检查是否请求了 skill
             skill_request = self._extract_skill_request(response)
             if skill_request and skill_request["skill"] in available_skills:
-                # 执行请求的 skill
-                skill_result = self._execute_python_skill(skill_request["skill"], input_data)
+                # 执行请求的 skill（使用 skill 特定的 input）
+                skill_input = skill_request.get("input", {})
+                skill_result = self._execute_python_skill(skill_request["skill"], skill_input)
                 if skill_result and "error" not in skill_result:
-                    # 将 skill 结果添加到上下文，再次调用 LLM
-                    skill_context = f"\n\n## Skill Result: {skill_request['skill']}\n```json\n{json.dumps(skill_result, ensure_ascii=False, indent=2)}\n```\n\nPlease provide your response based on this skill result."
-                    messages.append({"role": "assistant", "content": response})
-                    messages.append({"role": "user", "content": skill_context})
-                    response = self.llm.chat(messages, temperature=0.3)
+                    # 如果 skill 返回了直接的 result 字段，直接使用
+                    if "result" in skill_result:
+                        response = skill_result["result"]
+                    else:
+                        # 将 skill 结果添加到上下文，再次调用 LLM
+                        skill_context = f"\n\n## Skill Result: {skill_request['skill']}\n```json\n{json.dumps(skill_result, ensure_ascii=False, indent=2)}\n```\n\nPlease provide your response based on this skill result."
+                        messages.append({"role": "assistant", "content": response})
+                        messages.append({"role": "user", "content": skill_context})
+                        response = self.llm.chat(messages, temperature=0.3)
 
             # 提取工具调用
             tool_calls = self._extract_tool_calls(response)
@@ -283,75 +312,27 @@ To use a skill, format your response as:
             )
 
     def _has_python_impl(self, skill_name: str) -> bool:
-        """检查技能是否有Python实现"""
-        cfg = get_config()
-        skill_dir = Path(cfg.registry.skills_dir) / skill_name
-        init_py = skill_dir / "__init__.py"
-        return init_py.exists()
+        """检查技能是否有脚本执行配置"""
+        return self.registry_scanner.has_script_execution(skill_name)
 
     def _execute_python_skill(self, skill_name: str, input_data: Dict) -> Optional[Dict]:
-        """执行Python技能实现"""
+        """执行Python技能实现（使用 UniversalScriptExecutor）"""
         if not self._has_python_impl(skill_name):
             return None
 
-        print(f"\n{'─'*40}")
-        print(f"🔧 EXECUTING SKILL: {skill_name}")
-        print(f"{'─'*40}")
-        print(f"📥 Input: {list(input_data.keys())}")
+        skill_spec = self.registry_scanner.get_skill_spec(skill_name)
+        if not skill_spec:
+            return {"error": f"Skill '{skill_name}' not found in registry"}
 
-        try:
-            cfg = get_config()
-            skill_dir = Path(cfg.registry.skills_dir) / skill_name
+        execution_config = skill_spec.get("execution", {})
+        skill_dir = Path(self.cfg.registry.skills_dir) / skill_name
 
-            # 动态加载技能模块
-            spec = importlib.util.spec_from_file_location(
-                f"skill_{skill_name}",
-                skill_dir / "__init__.py"
-            )
-            if spec is None or spec.loader is None:
-                print(f"✗ Failed to load skill module")
-                return None
-
-            module = importlib.util.module_from_spec(spec)
-            sys.modules[f"skill_{skill_name}"] = module
-            spec.loader.exec_module(module)
-
-            # 调用 execute 函数
-            if hasattr(module, 'execute'):
-                result = module.execute(input_data)
-
-                # 打印结果摘要
-                if result and "error" not in result:
-                    if "matched_tools" in result:
-                        print(f"📤 Output: {len(result.get('matched_tools', []))} matched tools")
-                        for tool in result.get('matched_tools', [])[:3]:
-                            print(f"      - {tool.get('toolname', 'N/A')} (score: {tool.get('relevance_score', 0):.2f})")
-                    elif "results" in result:
-                        print(f"📤 Output: {len(result.get('results', []))} search results")
-                        for r in result.get('results', [])[:3]:
-                            score = r.get('score', 0)
-                            name = r.get('toolname', r.get('title', 'N/A'))
-                            print(f"      - {name} (score: {score:.2f})")
-                    elif "sample_size" in result:
-                        print(f"📤 Output: sample_size={result.get('sample_size')}, n_variables={result.get('n_variables')}")
-                    elif "decision" in result:
-                        print(f"📤 Output: decision={result.get('decision')}, confidence={result.get('confidence', 0):.2f}")
-                    elif "questions" in result:
-                        print(f"📤 Output: {len(result.get('questions', []))} questions generated")
-                    else:
-                        print(f"📤 Output: {list(result.keys())[:5]}")
-                else:
-                    print(f"✗ Error: {result.get('error', 'Unknown error') if result else 'No result'}")
-
-                print(f"{'─'*40}")
-                return result
-
-        except Exception as e:
-            print(f"✗ Exception: {e}")
-            logger.error(f"Error executing Python skill {skill_name}: {e}")
-            return {"error": str(e)}
-
-        return None
+        return self.universal_executor.execute_skill(
+            skill_name=skill_name,
+            skill_dir=skill_dir,
+            execution_config=execution_config,
+            input_data=input_data
+        )
 
     def _build_skill_context(self, skill_names: List[str], input_data: Dict = None) -> str:
         """构建技能上下文，执行Python技能并包含结果"""
@@ -507,6 +488,9 @@ class AsyncAgentExecutor:
         self.llm = llm_client or AsyncQwenClient()
         self.agent_manager = agent_manager or AgentManager()
         self.skill_manager = SkillManager()
+        self.universal_executor = get_universal_executor()
+        self.registry_scanner = get_scanner()
+        self.cfg = get_config()
 
     async def execute_agent(self, agent_name: str, input_data: Dict) -> ExecutionResult:
         """异步执行指定的 agent"""
@@ -522,23 +506,41 @@ class AsyncAgentExecutor:
         try:
             system_prompt = agent_config["prompt"]
 
-            # 获取可用 skills（不自动执行）
+            # 获取可用 skills（支持自动发现）
             available_skills = agent_config["frontmatter"].get("skills", [])
+
+            # 如果 agent 没有配置 skills 列表，自动获取所有可用 skills
+            if not available_skills:
+                available_skills = self.registry_scanner.list_skills()
+
             if available_skills:
-                skill_list = "\n".join([f"- {s}" for s in available_skills])
+                # 构建 skills 描述（包含 name 和 description）
+                skill_descriptions = []
+                for skill_name in available_skills:
+                    skill_spec = self.registry_scanner.get_skill_spec(skill_name)
+                    if skill_spec:
+                        desc = skill_spec["frontmatter"].get("description", "")
+                        skill_descriptions.append(f"- **{skill_name}**: {desc}")
+
+                skills_section = "\n".join(skill_descriptions)
+
                 system_prompt = f"""## Available Skills
-You can request these skills when needed by using function call format:
+You have access to the following skills that you can use when needed:
 
-{skill_list}
+{skills_section}
 
-To use a skill, format your response as:
+**How to use a skill:**
+When you need to use a skill, format your response as:
 ```json
 {{
-  "skill": "{available_skills[0] if available_skills else "skill_name"}",
+  "skill": "skill_name",
   "action": "execute",
+  "input": {{...}},
   "reasoning": "Why this skill is needed"
 }}
 ```
+
+The system will execute the skill and provide you with results.
 
 {system_prompt}"""
 
@@ -552,14 +554,19 @@ To use a skill, format your response as:
             # 检查是否请求了 skill
             skill_request = self._extract_skill_request(response)
             if skill_request and skill_request["skill"] in available_skills:
-                # 执行请求的 skill
-                skill_result = await self._async_execute_python_skill(skill_request["skill"], input_data)
+                # 执行请求的 skill（使用 skill 特定的 input）
+                skill_input = skill_request.get("input", {})
+                skill_result = await self._async_execute_python_skill(skill_request["skill"], skill_input)
                 if skill_result and "error" not in skill_result:
-                    # 将 skill 结果添加到上下文，再次调用 LLM
-                    skill_context = f"\n\n## Skill Result: {skill_request['skill']}\n```json\n{json.dumps(skill_result, ensure_ascii=False, indent=2)}\n```\n\nPlease provide your response based on this skill result."
-                    messages.append({"role": "assistant", "content": response})
-                    messages.append({"role": "user", "content": skill_context})
-                    response = await self.llm.chat(messages, temperature=0.3)
+                    # 如果 skill 返回了直接的 result 字段，直接使用
+                    if "result" in skill_result:
+                        response = skill_result["result"]
+                    else:
+                        # 将 skill 结果添加到上下文，再次调用 LLM
+                        skill_context = f"\n\n## Skill Result: {skill_request['skill']}\n```json\n{json.dumps(skill_result, ensure_ascii=False, indent=2)}\n```\n\nPlease provide your response based on this skill result."
+                        messages.append({"role": "assistant", "content": response})
+                        messages.append({"role": "user", "content": skill_context})
+                        response = await self.llm.chat(messages, temperature=0.3)
 
             return ExecutionResult(
                 success=True,
@@ -578,75 +585,27 @@ To use a skill, format your response as:
             )
 
     def _has_python_impl(self, skill_name: str) -> bool:
-        """检查技能是否有Python实现"""
-        cfg = get_config()
-        skill_dir = Path(cfg.registry.skills_dir) / skill_name
-        init_py = skill_dir / "__init__.py"
-        return init_py.exists()
+        """检查技能是否有脚本执行配置"""
+        return self.registry_scanner.has_script_execution(skill_name)
 
     def _execute_python_skill(self, skill_name: str, input_data: Dict) -> Optional[Dict]:
-        """执行Python技能实现"""
+        """执行Python技能实现（使用 UniversalScriptExecutor）"""
         if not self._has_python_impl(skill_name):
             return None
 
-        print(f"\n{'─'*40}")
-        print(f"🔧 EXECUTING SKILL: {skill_name}")
-        print(f"{'─'*40}")
-        print(f"📥 Input: {list(input_data.keys())}")
+        skill_spec = self.registry_scanner.get_skill_spec(skill_name)
+        if not skill_spec:
+            return {"error": f"Skill '{skill_name}' not found in registry"}
 
-        try:
-            cfg = get_config()
-            skill_dir = Path(cfg.registry.skills_dir) / skill_name
+        execution_config = skill_spec.get("execution", {})
+        skill_dir = Path(self.cfg.registry.skills_dir) / skill_name
 
-            # 动态加载技能模块
-            spec = importlib.util.spec_from_file_location(
-                f"skill_{skill_name}",
-                skill_dir / "__init__.py"
-            )
-            if spec is None or spec.loader is None:
-                print(f"✗ Failed to load skill module")
-                return None
-
-            module = importlib.util.module_from_spec(spec)
-            sys.modules[f"skill_{skill_name}"] = module
-            spec.loader.exec_module(module)
-
-            # 调用 execute 函数
-            if hasattr(module, 'execute'):
-                result = module.execute(input_data)
-
-                # 打印结果摘要
-                if result and "error" not in result:
-                    if "matched_tools" in result:
-                        print(f"📤 Output: {len(result.get('matched_tools', []))} matched tools")
-                        for tool in result.get('matched_tools', [])[:3]:
-                            print(f"      - {tool.get('toolname', 'N/A')} (score: {tool.get('relevance_score', 0):.2f})")
-                    elif "results" in result:
-                        print(f"📤 Output: {len(result.get('results', []))} search results")
-                        for r in result.get('results', [])[:3]:
-                            score = r.get('score', 0)
-                            name = r.get('toolname', r.get('title', 'N/A'))
-                            print(f"      - {name} (score: {score:.2f})")
-                    elif "sample_size" in result:
-                        print(f"📤 Output: sample_size={result.get('sample_size')}, n_variables={result.get('n_variables')}")
-                    elif "decision" in result:
-                        print(f"📤 Output: decision={result.get('decision')}, confidence={result.get('confidence', 0):.2f}")
-                    elif "questions" in result:
-                        print(f"📤 Output: {len(result.get('questions', []))} questions generated")
-                    else:
-                        print(f"📤 Output: {list(result.keys())[:5]}")
-                else:
-                    print(f"✗ Error: {result.get('error', 'Unknown error') if result else 'No result'}")
-
-                print(f"{'─'*40}")
-                return result
-
-        except Exception as e:
-            print(f"✗ Exception: {e}")
-            logger.error(f"Error executing Python skill {skill_name}: {e}")
-            return {"error": str(e)}
-
-        return None
+        return self.universal_executor.execute_skill(
+            skill_name=skill_name,
+            skill_dir=skill_dir,
+            execution_config=execution_config,
+            input_data=input_data
+        )
 
     def _build_skill_context(self, skill_names: List[str], input_data: Dict = None) -> str:
         """构建技能上下文，执行Python技能并包含结果"""
@@ -694,6 +653,7 @@ To use a skill, format your response as:
                     return {
                         "skill": data["skill"],
                         "action": data.get("action", "execute"),
+                        "input": data.get("input", {}),
                         "reasoning": data.get("reasoning", "")
                     }
             lines = response.strip().split('\n')

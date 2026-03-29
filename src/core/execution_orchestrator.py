@@ -7,14 +7,16 @@ import json
 from typing import Dict, List, Any, Optional, Generator
 from pathlib import Path
 
-from src.core.execution_context import ExecutionContext
-from src.core.task_parser import TaskParser, Task, ActionType
-from src.core.python_script_executor import PythonScriptExecutor
-from src.core.agent_manager import AgentManager
-from src.core.skill_manager import SkillManager
-from src.core.llm_client import QwenClient
-from src.config import get_config
-from src.utils.logger import get_logger
+from core.execution_context import ExecutionContext
+from core.task_parser import TaskParser, Task, ActionType
+from core.python_script_executor import PythonScriptExecutor
+from core.universal_executor import get_universal_executor
+from core.registry_scanner import get_scanner
+from core.agent_manager import AgentManager
+from core.skill_manager import SkillManager
+from core.llm_client import QwenClient
+from config import get_config
+from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
@@ -35,6 +37,8 @@ class ExecutionOrchestrator:
         self.agent_manager = AgentManager()
         self.skill_manager = SkillManager()
         self.script_executor = PythonScriptExecutor()
+        self.universal_executor = get_universal_executor()
+        self.registry_scanner = get_scanner()
         self.task_parser = TaskParser()
         self.cfg = get_config()
 
@@ -74,24 +78,41 @@ class ExecutionOrchestrator:
             # 构建系统提示
             system_prompt = agent_config["prompt"]
 
-            # 添加预加载的 skills 信息
+            # 添加预加载的 skills 信息（支持自动发现）
             preloaded_skills = agent_config["frontmatter"].get("skills", [])
+
+            # 如果 agent 没有配置 skills 列表，自动获取所有可用 skills
+            if not preloaded_skills:
+                preloaded_skills = self.registry_scanner.list_skills()
+
             if preloaded_skills:
-                skill_list = "\n".join([f"- {s}" for s in preloaded_skills])
+                # 构建 skills 描述（包含 name 和 description）
+                skill_descriptions = []
+                for skill_name in preloaded_skills:
+                    skill_spec = self.registry_scanner.get_skill_spec(skill_name)
+                    if skill_spec:
+                        desc = skill_spec["frontmatter"].get("description", "")
+                        skill_descriptions.append(f"- **{skill_name}**: {desc}")
+
+                skills_section = "\n".join(skill_descriptions)
+
                 system_prompt = f"""## Available Skills
-You can request these skills when needed by using function call format:
+You have access to the following skills that you can use when needed:
 
-{skill_list}
+{skills_section}
 
-To use a skill, format your response as:
+**How to use a skill:**
+When you need to use a skill, format your response as:
 ```json
 {{
-  "skill": "{preloaded_skills[0] if preloaded_skills else "skill_name"}",
+  "skill": "skill_name",
   "action": "execute",
-  "input": {{}},
+  "input": {{...}},
   "reasoning": "Why this skill is needed"
 }}
 ```
+
+The system will execute the skill and provide you with results.
 
 {system_prompt}"""
 
@@ -227,22 +248,29 @@ To use a skill, format your response as:
         # 合并输入数据
         merged_input = {**input_data, **skill_input}
 
-        # 获取 skill 配置
-        skill_config = self.skill_manager.get_skill(skill_name)
-        if not skill_config:
-            return {"error": f"Skill '{skill_name}' not found"}
+        # 获取 skill spec（从扫描器）
+        skill_spec = self.registry_scanner.get_skill_spec(skill_name)
+        if not skill_spec:
+            return {"error": f"Skill '{skill_name}' not found in registry"}
 
-        # 检查是否有 Python 实现
-        skill_dir = Path(self.cfg.registry.skills_dir) / skill_name
-        script_path = skill_dir / "__init__.py"
+        # 检查执行配置
+        execution_config = skill_spec.get("execution", {})
+        exec_type = execution_config.get("type", "llm")
 
-        if script_path.exists():
-            # 执行 Python 脚本
-            return self.script_executor.execute_skill_script(
-                skill_name, script_path, merged_input
+        if exec_type == "script":
+            # 使用通用脚本执行器（只传递 skill 特定的 input）
+            skill_dir = Path(self.cfg.registry.skills_dir) / skill_name
+            return self.universal_executor.execute_skill(
+                skill_name=skill_name,
+                skill_dir=skill_dir,
+                execution_config=execution_config,
+                input_data=skill_input
             )
         else:
             # 使用 LLM 执行
+            skill_config = self.skill_manager.get_skill(skill_name)
+            if not skill_config:
+                return {"error": f"Skill '{skill_name}' not found"}
             return self._execute_skill_with_llm(
                 skill_name, skill_config, merged_input, context
             )
@@ -400,11 +428,17 @@ To use a skill, format your response as:
             if result["type"] == "skill":
                 skill_result = result["result"]
                 if "error" not in skill_result:
-                    # 成功的 skill 结果
-                    results_text.append(
-                        f"## Skill Result: {result['name']}\n"
-                        f"```json\n{json.dumps(skill_result, ensure_ascii=False, indent=2)}\n```"
-                    )
+                    # 如果 skill 返回了直接的 result 字段，直接使用
+                    if "result" in skill_result:
+                        results_text.append(
+                            f"## Skill Result: {result['name']}\n{skill_result['result']}"
+                        )
+                    else:
+                        # 成功的 skill 结果
+                        results_text.append(
+                            f"## Skill Result: {result['name']}\n"
+                            f"```json\n{json.dumps(skill_result, ensure_ascii=False, indent=2)}\n```"
+                        )
                 else:
                     # Skill 执行失败
                     has_error = True

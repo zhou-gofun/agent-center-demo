@@ -3,6 +3,11 @@ name: question-generator
 description: 问题生成，基于数据特征生成追问
 allowed-tools: []
 context: inline
+execution:
+  type: script
+  handler: scripts/generate.py
+  entrypoint: generate_questions
+  timeout: 30
 ---
 
 # Question Generator
@@ -91,7 +96,7 @@ python src/registry/skills/question_generator/scripts/generate.py \
 Or as a module:
 
 ```python
-from src.registry.skills.question_generator.scripts.generate import generate_questions
+from registry.skills.question_generator.scripts.generate import generate_questions
 
 result = generate_questions(
     data_features={"sample_size": 150, "grouping_variables": ["treatment"]},

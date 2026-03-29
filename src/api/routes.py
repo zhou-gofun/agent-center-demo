@@ -5,14 +5,14 @@ Flask REST API 路由
 """
 from flask import Blueprint, request, jsonify
 from typing import Dict, Any
-from src.core.executor import get_executor
-from src.core.agent_manager import AgentManager
-from src.core.skill_manager import SkillManager
-from src.vector_db.chroma_store import get_vector_store
-from src.vector_db.embeddings import get_embedding_function
-from src.vector_db.data_loader import get_assembly_loader, get_literature_loader
-from src.utils.logger import get_logger
-from src.utils.debug import log_agent_execution, enable_debug_mode
+from core.executor import get_executor
+from core.agent_manager import AgentManager
+from core.skill_manager import SkillManager
+from vector_db.chroma_store import get_vector_store
+from vector_db.embeddings import get_embedding_function
+from vector_db.data_loader import get_assembly_loader, get_literature_loader
+from utils.logger import get_logger
+from utils.debug import log_agent_execution, enable_debug_mode
 
 logger = get_logger(__name__)
 
@@ -35,8 +35,8 @@ def get_vector_db():
     """获取向量数据库实例（懒加载）"""
     global vector_store
     if vector_store is None:
-        from src.vector_db.chroma_store import get_vector_store as _get_store
-        from src.vector_db.embeddings import get_embedding_function
+        from vector_db.chroma_store import get_vector_store as _get_store
+        from vector_db.embeddings import get_embedding_function
         vector_store = _get_store()
         # 初始化集合
         embedding_fn = get_embedding_function()

@@ -67,7 +67,7 @@ def match_tools(query: str, top_k: int = 10, use_vector: bool = False) -> Dict[s
 def search_with_keywords(query: str, top_k: int) -> List[Dict[str, Any]]:
     """Search tools using keyword matching."""
     try:
-        from src.vector_db.data_loader import get_assembly_loader
+        from vector_db.data_loader import get_assembly_loader
 
         loader = get_assembly_loader()
         df = loader.load()
@@ -122,7 +122,7 @@ def search_with_keywords(query: str, top_k: int) -> List[Dict[str, Any]]:
 def search_with_vector(query: str, top_k: int) -> Dict[str, Any]:
     """Search tools using vector semantic search."""
     try:
-        from src.registry.skills.semantic_search.scripts.search import semantic_search
+        from registry.skills.semantic_search.scripts.search import semantic_search
 
         result = semantic_search(query, collection="assembly_tools", top_k=top_k)
 
@@ -184,11 +184,31 @@ def main():
 
     args = parser.parse_args()
 
+    # Try to read JSON input from stdin first (for skill execution)
+    stdin_data = sys.stdin.read().strip()
+    if stdin_data:
+        try:
+            input_data = json.loads(stdin_data)
+            # Check if it's the UniversalScriptExecutor format
+            if "__entrypoint__" in input_data:
+                args.query = input_data["__input__"].get("query", args.query or "")
+                args.top_k = input_data["__input__"].get("top_k", args.top_k)
+                args.use_vector = input_data["__input__"].get("use_vector", args.use_vector)
+            else:
+                # Direct JSON input
+                args.query = input_data.get("query", args.query or "")
+                args.top_k = input_data.get("top_k", args.top_k)
+                args.use_vector = input_data.get("use_vector", args.use_vector)
+        except json.JSONDecodeError:
+            # Not JSON, treat as plain text query
+            if not args.query:
+                args.query = stdin_data
+
     if not args.query:
-        args.query = sys.stdin.read().strip()
+        parser.error("--query is required or provide via stdin")
 
     result = match_tools(args.query, args.top_k, args.use_vector)
-    print(json.dumps(result, indent=2, ensure_ascii=False))
+    print(json.dumps(result, ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":

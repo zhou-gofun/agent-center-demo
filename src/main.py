@@ -6,13 +6,17 @@ Agent 中心的主应用入口点
 import os
 from flask import Flask, jsonify
 from flask_cors import CORS
-from src.config import get_config
-from src.api.routes import api_bp
-from src.utils.logger import get_logger
-from src.core.agent_manager import AgentManager
-from src.core.skill_manager import SkillManager
+from config import get_config
+from api.routes import api_bp
+from utils.logger import get_logger
+from core.agent_manager import AgentManager
+from core.skill_manager import SkillManager
+from core.registry_scanner import get_scanner
 
 logger = get_logger(__name__)
+
+# 全局扫描器实例
+registry_scanner = None
 
 
 def create_app(config=None) -> Flask:
@@ -88,10 +92,19 @@ def create_app(config=None) -> Flask:
 
 def _init_components():
     """初始化核心组件"""
+    global registry_scanner
+
     try:
         # 初始化 agent 和 skill 管理器
         agent_manager = AgentManager()
         skill_manager = SkillManager()
+
+        # 动态扫描并注册 skills 和 agents
+        registry_scanner = get_scanner()
+        registry = registry_scanner.scan()
+
+        logger.info(f"Discovered {len(registry['skills'])} skills from {registry_scanner.skills_dir}")
+        logger.info(f"Discovered {len(registry['agents'])} agents from {registry_scanner.agents_dir}")
 
         # 从配置文件加载 agents 和 skills（已禁用 - 避免覆盖手动编辑的文件）
         # agent_manager.reload_from_config()

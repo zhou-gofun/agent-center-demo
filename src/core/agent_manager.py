@@ -7,8 +7,8 @@ import os
 import yaml
 from pathlib import Path
 from typing import Dict, List, Optional, Any
-from src.config import get_config
-from src.utils.logger import get_logger
+from config import get_config
+from utils.logger import get_logger
 
 logger = get_logger(__name__)
 

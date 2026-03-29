@@ -3,6 +3,11 @@ name: literature-matcher
 description: 文献匹配，基于数据特征推荐统计方法
 allowed-tools: [Read]
 context: inline
+execution:
+  type: script
+  handler: scripts/match.py
+  entrypoint: match_literature
+  timeout: 30
 ---
 
 # Literature Matcher
@@ -85,7 +90,7 @@ python src/registry/skills/literature_matcher/scripts/match.py \
 Or as a module:
 
 ```python
-from src.registry.skills.literature_matcher.scripts.match import match_literature
+from registry.skills.literature_matcher.scripts.match import match_literature
 
 result = match_literature(
     data_features={"sample_size": 150, "study_design": "rct"},

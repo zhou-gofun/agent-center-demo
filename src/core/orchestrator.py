@@ -6,11 +6,11 @@ Agent 编排器
 import json
 import time
 from typing import Dict, List, Any, Generator, Optional
-from src.core.llm_client import QwenClient
-from src.core.agent_manager import AgentManager
-from src.core.skill_manager import SkillManager
-from src.vector_db.chroma_store import get_vector_store
-from src.utils.logger import get_logger
+from core.llm_client import QwenClient
+from core.agent_manager import AgentManager
+from core.skill_manager import SkillManager
+from vector_db.chroma_store import get_vector_store
+from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
@@ -193,7 +193,7 @@ class AgentOrchestrator:
 
     def _call_agent(self, agent_name: str, query: str, context: Dict, search_results: List[Dict]) -> str:
         """调用指定的 Agent"""
-        from src.core.executor import get_executor
+        from core.executor import get_executor
         executor = get_executor()
 
         # 构建输入，包含搜索结果
@@ -262,7 +262,7 @@ class StreamingOrchestrator:
 
         # 继续执行 pipeline-agent
         events = []
-        from src.core.executor import get_executor
+        from core.executor import get_executor
         executor = get_executor()
 
         events.append({

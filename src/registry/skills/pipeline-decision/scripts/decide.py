@@ -209,32 +209,44 @@ def main():
 
     args = parser.parse_args()
 
-    # Load data features
+    data_features = {}
+    literature_matches = {}
+    generated_questions = []
+
+    # Try to read JSON input from stdin first (for skill execution)
+    stdin_data = sys.stdin.read().strip()
+    if stdin_data:
+        try:
+            input_data = json.loads(stdin_data)
+            # Check if it's the UniversalScriptExecutor format
+            if "__entrypoint__" in input_data:
+                input_data = input_data["__input__"]
+            data_features = input_data.get("data_features", {})
+            literature_matches = input_data.get("literature_matches", {})
+            generated_questions = input_data.get("generated_questions", [])
+        except json.JSONDecodeError:
+            pass
+
+    # Load data features from file/arg if provided
     if args.features_file:
         with open(args.features_file, 'r') as f:
             data_features = json.load(f)
     elif args.data_features:
         data_features = json.loads(args.data_features)
-    else:
-        data_features = {}
 
-    # Load literature matches
+    # Load literature matches from file/arg if provided
     if args.matches_file:
         with open(args.matches_file, 'r') as f:
             literature_matches = json.load(f)
     elif args.literature_matches:
         literature_matches = json.loads(args.literature_matches)
-    else:
-        literature_matches = {}
 
-    # Load questions
+    # Load questions from file/arg if provided
     if args.questions_file:
         with open(args.questions_file, 'r') as f:
             generated_questions = json.load(f)
     elif args.questions:
         generated_questions = json.loads(args.questions)
-    else:
-        generated_questions = []
 
     result = make_decision(
         data_features=data_features,
@@ -244,7 +256,7 @@ def main():
         continue_questions_threshold=args.continue_threshold
     )
 
-    print(json.dumps(result, indent=2))
+    print(json.dumps(result, ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":

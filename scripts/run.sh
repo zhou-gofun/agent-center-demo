@@ -20,4 +20,4 @@ echo ""
 echo "按 Ctrl+C 停止服务"
 echo ""
 
-.venv_new/bin/python -m src.main
+.venv_new/bin/python3 src/main.py

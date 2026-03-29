@@ -276,16 +276,44 @@ def main():
 
     args = parser.parse_args()
 
+    data_features = None
+
+    # Try to read JSON input from stdin first (for skill execution)
+    stdin_data = sys.stdin.read().strip()
+    if stdin_data:
+        try:
+            input_data = json.loads(stdin_data)
+            # Check if it's the UniversalScriptExecutor format
+            if "__entrypoint__" in input_data:
+                data_features = input_data["__input__"]
+                # Override with CLI args if provided
+                if args.query:
+                    data_features["query"] = args.query
+                if args.db_path:
+                    data_features["db_path"] = args.db_path
+                if args.threshold != 0.5:
+                    data_features["match_threshold"] = args.threshold
+            else:
+                # Direct JSON input
+                data_features = input_data
+        except json.JSONDecodeError:
+            pass
+
     if args.file:
         with open(args.file, 'r') as f:
             data_features = json.load(f)
     elif args.data_features:
         data_features = json.loads(args.data_features)
-    else:
-        data_features = json.loads(sys.stdin.read())
+    elif not data_features:
+        parser.error("--data-features, --file, or stdin JSON input is required")
 
-    result = match_literature(data_features, args.query, args.db_path, args.threshold)
-    print(json.dumps(result, indent=2))
+    result = match_literature(
+        data_features=data_features,
+        query=data_features.get("query") if args.query is None else args.query,
+        db_path=data_features.get("db_path") if args.db_path is None else args.db_path,
+        match_threshold=data_features.get("match_threshold", args.threshold)
+    )
+    print(json.dumps(result, ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":

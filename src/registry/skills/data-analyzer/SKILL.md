@@ -3,6 +3,11 @@ name: data-analyzer
 description: 数据分析执行，提取数据特征
 allowed-tools: []
 context: inline
+execution:
+  type: script
+  handler: scripts/analyze.py
+  entrypoint: analyze_data
+  timeout: 30
 ---
 
 # Data Analyzer
@@ -87,7 +92,7 @@ python src/registry/skills/data_analyzer/scripts/analyze.py --data-summary "<sum
 Or use as a module:
 
 ```python
-from src.registry.skills.data_analyzer.scripts.analyze import analyze_data
+from registry.skills.data_analyzer.scripts.analyze import analyze_data
 
 result = analyze_data(data_summary_text)
 # Returns: dict with sample_size, variable_types, grouping_variables, etc.

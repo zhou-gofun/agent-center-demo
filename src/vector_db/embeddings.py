@@ -5,9 +5,9 @@ Embedding 生成
 """
 from typing import List, Union
 from pathlib import Path
-from src.core.llm_client import QwenClient
-from src.config import get_config
-from src.utils.logger import get_logger
+from core.llm_client import QwenClient
+from config import get_config
+from utils.logger import get_logger
 
 logger = get_logger(__name__)
 

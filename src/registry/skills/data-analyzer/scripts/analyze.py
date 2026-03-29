@@ -218,17 +218,33 @@ def main():
 
     args = parser.parse_args()
 
+    # Try to read JSON input from stdin first (for skill execution)
+    stdin_data = sys.stdin.read().strip()
+    data_summary = None
+
+    if stdin_data:
+        try:
+            input_data = json.loads(stdin_data)
+            # Check if it's the UniversalScriptExecutor format
+            if "__entrypoint__" in input_data:
+                data_summary = input_data["__input__"].get("data_summary")
+            else:
+                # Direct JSON input
+                data_summary = input_data.get("data_summary")
+        except json.JSONDecodeError:
+            # Not JSON, treat as plain text data summary
+            data_summary = stdin_data
+
     if args.file:
         with open(args.file, 'r') as f:
             data_summary = f.read()
     elif args.data_summary:
         data_summary = args.data_summary
-    else:
-        # Read from stdin
-        data_summary = sys.stdin.read()
+    elif not data_summary:
+        parser.error("--data-summary, --file, or stdin input is required")
 
     result = analyze_data(data_summary)
-    print(json.dumps(result, indent=2))
+    print(json.dumps(result, ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":

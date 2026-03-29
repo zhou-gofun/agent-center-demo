@@ -7,10 +7,10 @@ from typing import Dict, List, Any, Optional, Callable
 from dataclasses import dataclass, field
 from enum import Enum
 
-from src.core.execution_context import ExecutionContext
-from src.core.execution_orchestrator import ExecutionOrchestrator
-from src.core.task_parser import ActionType
-from src.utils.logger import get_logger
+from core.execution_context import ExecutionContext
+from core.execution_orchestrator import ExecutionOrchestrator
+from core.task_parser import ActionType
+from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
@@ -144,7 +144,7 @@ class ConversationalLoop:
 
             # 执行 agent
             if not self.orchestrator:
-                from src.core.execution_orchestrator import get_orchestrator
+                from core.execution_orchestrator import get_orchestrator
                 self.orchestrator = get_orchestrator()
 
             result = self.orchestrator.execute_agent(
@@ -286,6 +286,6 @@ def get_conversational_loop() -> ConversationalLoop:
     """获取对话循环实例"""
     global _loop
     if _loop is None:
-        from src.core.execution_orchestrator import get_orchestrator
+        from core.execution_orchestrator import get_orchestrator
         _loop = ConversationalLoop(orchestrator=get_orchestrator())
     return _loop
