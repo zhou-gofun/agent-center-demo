@@ -203,9 +203,42 @@ EOF
 
 ## 环境变量
 
-- `QWEN_KEY`: Qwen API Key
-- `QWEN_URL`: Qwen API URL
-- `FLASK_HOST`: Flask 服务地址
-- `FLASK_PORT`: Flask 服务端口
+### LLM 配置（通用，支持任意 OpenAI 兼容接口）
+
+- `LLM_KEY`: LLM API Key（兼容旧名称 `QWEN_KEY`）
+- `LLM_URL`: LLM API URL（兼容旧名称 `QWEN_URL`）
+- `LLM_MODEL`: 模型名称（默认：gpt-3.5-turbo）
+- `EMBEDDING_MODEL`: Embedding 模型（默认：text-embedding-ada-002）
+
+### 服务配置
+
+- `FLASK_HOST`: Flask 服务地址（默认：0.0.0.0）
+- `FLASK_PORT`: Flask 服务端口（默认：8000）
+- `DEBUG_MODE`: 调试模式开关（默认：false）
+
+### 数据库配置
+
 - `VECTOR_DB_PATH`: 向量数据库存储路径
-- `DEBUG_MODE`: 调试模式开关
+
+### 外部 API
+
+- `AMAP_KEY`: 高德地图 API Key（天气查询功能）
+
+### 配置示例
+
+```bash
+# 使用通义千问
+LLM_KEY=sk-xxx
+LLM_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+LLM_MODEL=qwen-plus
+
+# 使用 OpenAI
+LLM_KEY=sk-xxx
+LLM_URL=https://api.openai.com/v1
+LLM_MODEL=gpt-3.5-turbo
+
+# 使用其他兼容接口
+LLM_KEY=your-key
+LLM_URL=https://your-api-endpoint/v1
+LLM_MODEL=your-model-name
+```

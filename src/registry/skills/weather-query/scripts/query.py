@@ -7,13 +7,14 @@ Query real-time weather for Chinese cities using AMap (高德地图) API.
 import argparse
 import json
 import sys
+import os
 import re
 from typing import Dict, Any
 from datetime import datetime
 import urllib.parse
 
 # AMap API Configuration
-AMAP_KEY = "d5234532cba3ddf41e79baafd345af5f"
+AMAP_KEY = os.getenv("AMAP_KEY", "")
 AMAP_WEATHER_URL = "https://restapi.amap.com/v3/weather/weatherInfo"
 
 

@@ -15,11 +15,12 @@ load_dotenv()
 
 @dataclass
 class QwenConfig:
-    """Qwen API 配置"""
-    api_key: str = field(default_factory=lambda: os.getenv("QWEN_KEY", "sk-5973c06353d545f382e343430da89"))
-    base_url: str = field(default_factory=lambda: os.getenv("QWEN_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"))
-    model: str = "qwen-plus"
-    embedding_model: str = "text-embedding-v2"
+    """LLM API 配置（兼容任意 OpenAI 兼容接口）"""
+    # 支持新旧环境变量名称：LLM_KEY/LLM_URL 或 QWEN_KEY/QWEN_URL
+    api_key: str = field(default_factory=lambda: os.getenv("LLM_KEY") or os.getenv("QWEN_KEY", "sk-xxx"))
+    base_url: str = field(default_factory=lambda: os.getenv("LLM_URL") or os.getenv("QWEN_URL", "https://api.openai.com/v1"))
+    model: str = field(default_factory=lambda: os.getenv("LLM_MODEL", "gpt-3.5-turbo"))
+    embedding_model: str = field(default_factory=lambda: os.getenv("EMBEDDING_MODEL", "text-embedding-ada-002"))
     timeout: int = 120
 
 
@@ -47,6 +48,13 @@ class DataConfig:
 
 
 @dataclass
+class APIConfig:
+    """外部 API 配置"""
+    # 高德地图 API Key（用于天气查询等功能）
+    amap_key: str = field(default_factory=lambda: os.getenv("AMAP_KEY", ""))
+
+
+@dataclass
 class RegistryConfig:
     """注册表配置"""
     agents_dir: str = "./registry/agents"
@@ -63,6 +71,7 @@ class Config:
     vector_db: VectorDBConfig = field(default_factory=VectorDBConfig)
     data: DataConfig = field(default_factory=DataConfig)
     registry: RegistryConfig = field(default_factory=RegistryConfig)
+    api: APIConfig = field(default_factory=APIConfig)
 
     # 项目根目录
     project_root: Path = field(default_factory=lambda: Path(__file__).parent.parent)
