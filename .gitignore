@@ -15,6 +15,9 @@ ENV/
 # Environment variables
 .env
 
+# Data files (local runtime data)
+data/
+
 # IDE
 .vscode/
 .idea/
