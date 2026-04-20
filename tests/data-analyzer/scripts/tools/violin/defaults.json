@@ -1,0 +1,7 @@
+{
+  "variable": "auto",
+  "group_by": "auto",
+  "orientation": "vertical",
+  "include_boxplot": true,
+  "output_format": "json"
+}

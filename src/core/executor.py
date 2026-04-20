@@ -27,7 +27,7 @@ from utils.logger import get_logger
 # 新的编排系统
 from core.execution_context import ExecutionContext
 from core.task_parser import TaskParser
-from core.execution_orchestrator import ExecutionOrchestrator, get_orchestrator
+from core.simple_agent_executor import SimpleAgentExecutor, get_simple_executor
 from core.python_script_executor import PythonScriptExecutor
 
 logger = get_logger(__name__)
@@ -262,25 +262,68 @@ The system will execute the skill and provide you with results.
                 {"role": "user", "content": self._format_input(input_data)}
             ]
 
-            # 调用 LLM
-            response = self.llm.chat(messages, temperature=0.3)
+            # 多步执行循环 - 持续执行直到任务完成
+            max_iterations = 5  # 防止无限循环
+            iteration = 0
 
-            # 检查是否请求了 skill
-            skill_request = self._extract_skill_request(response)
-            if skill_request and skill_request["skill"] in available_skills:
-                # 执行请求的 skill（使用 skill 特定的 input）
-                skill_input = skill_request.get("input", {})
-                skill_result = self._execute_python_skill(skill_request["skill"], skill_input)
-                if skill_result and "error" not in skill_result:
-                    # 如果 skill 返回了直接的 result 字段，直接使用
-                    if "result" in skill_result:
-                        response = skill_result["result"]
-                    else:
-                        # 将 skill 结果添加到上下文，再次调用 LLM
-                        skill_context = f"\n\n## Skill Result: {skill_request['skill']}\n```json\n{json.dumps(skill_result, ensure_ascii=False, indent=2)}\n```\n\nPlease provide your response based on this skill result."
+            while iteration < max_iterations:
+                iteration += 1
+
+                # 调用 LLM
+                response = self.llm.chat(messages, temperature=0.3)
+
+                # 检查是否请求了 skill
+                skill_request = self._extract_skill_request(response)
+                if skill_request and skill_request["skill"] in available_skills:
+                    # 执行请求的 skill（使用 skill 特定的 input）
+                    skill_input = skill_request.get("input", {})
+                    skill_result = self._execute_python_skill(skill_request["skill"], skill_input)
+
+                    print(f"skill_result: {skill_result}")
+
+                    # 检查 skill 是否有建议的下一步操作
+                    has_suggested_actions = (
+                        skill_result and
+                        "error" not in skill_result and
+                        (
+                            "suggested_analysis" in skill_result or
+                            "matched_tools" in skill_result or
+                            "next_actions" in skill_result
+                        )
+                    )
+
+                    if has_suggested_actions:
+                        # 将 skill 结果添加到上下文，继续执行
+                        suggested_tools = skill_result.get("suggested_analysis", skill_result.get("matched_tools", []))
+
+                        skill_context = f"\n\n## Skill Result: {skill_request['skill']}\n```json\n{json.dumps(skill_result, ensure_ascii=False, indent=2)}\n```\n\n"
+                        skill_context += f"The skill suggested the following next actions: {suggested_tools}\n\n"
+                        skill_context += "IMPORTANT: Continue by executing the relevant tools to complete the user's request. "
+                        skill_context += "Format your next action as a JSON skill call."
+
                         messages.append({"role": "assistant", "content": response})
                         messages.append({"role": "user", "content": skill_context})
-                        response = self.llm.chat(messages, temperature=0.3)
+                        # 继续循环以执行下一个工具
+                        continue
+
+                    elif skill_result and "error" not in skill_result:
+                        # 如果 skill 返回了直接的 result 字段，直接使用
+                        if "result" in skill_result:
+                            response = skill_result["result"]
+                            break  # 任务完成
+                        else:
+                            # 将 skill 结果添加到上下文，生成最终响应
+                            skill_context = f"\n\n## Skill Result: {skill_request['skill']}\n```json\n{json.dumps(skill_result, ensure_ascii=False, indent=2)}\n```\n\nPlease provide your response based on this skill result."
+                            messages.append({"role": "assistant", "content": response})
+                            messages.append({"role": "user", "content": skill_context})
+                            response = self.llm.chat(messages, temperature=0.3)
+                            break  # 任务完成
+                    else:
+                        # Skill 执行出错，停止
+                        break
+                else:
+                    # 没有 skill 请求，退出循环
+                    break
 
             # 提取工具调用
             tool_calls = self._extract_tool_calls(response)
@@ -428,27 +471,27 @@ The system will execute the skill and provide you with results.
         agent_name: str,
         input_data: Dict,
         context: Optional[ExecutionContext] = None,
-        use_orchestrator: bool = True
+        use_simple_executor: bool = True
     ) -> ExecutionResult:
         """
-        使用新编排系统执行 agent（支持上下文隔离）
+        使用简洁执行系统执行 agent（支持上下文隔离）
 
         Args:
             agent_name: agent 名称
             input_data: 输入数据
             context: 执行上下文
-            use_orchestrator: 是否使用新的编排系统
+            use_simple_executor: 是否使用简洁执行器
 
         Returns:
             执行结果
         """
-        if not use_orchestrator:
+        if not use_simple_executor:
             # 回退到旧的执行方式
             return self.execute_agent(agent_name, input_data)
 
         try:
-            orchestrator = get_orchestrator()
-            result = orchestrator.execute_agent(agent_name, input_data, context)
+            executor = get_simple_executor()
+            result = executor.execute(agent_name, input_data, context)
 
             if result.get("success"):
                 return ExecutionResult(
@@ -469,7 +512,7 @@ The system will execute the skill and provide you with results.
                 )
 
         except Exception as e:
-            logger.error(f"Error in orchestrated execution: {e}")
+            logger.error(f"Error in simple execution: {e}")
             # 回退到旧的执行方式
             return self.execute_agent(agent_name, input_data)
 

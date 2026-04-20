@@ -1,0 +1,48 @@
+{
+  "name": "descriptives",
+  "description": "计算描述性统计量，包括均值、标准差、中位数、四分位数、最小值、最大值等",
+  "when_to_use": [
+    "数值型变量需要统计分析",
+    "初次探索数据分布特征",
+    "需要了解数据中心趋势和离散程度",
+    "数据质量检查（识别异常值）"
+  ],
+  "data_requirements": {
+    "min_columns": 1,
+    "column_types": ["numeric"],
+    "min_rows": 2
+  },
+  "parameters": {
+    "variables": {
+      "type": "array",
+      "description": "要分析的变量名列表",
+      "default": "all_numeric",
+      "auto_detect": true,
+      "required": false
+    },
+    "group_by": {
+      "type": "string",
+      "description": "分组变量（可选），用于分组计算统计量",
+      "default": null,
+      "suggest_if": "categorical_found",
+      "required": false
+    },
+    "percentiles": {
+      "type": "array",
+      "description": "要计算的百分位数",
+      "default": [25, 50, 75, 90, 95, 99],
+      "required": false
+    },
+    "include": {
+      "type": "array",
+      "description": "要包含的统计量",
+      "default": ["count", "mean", "std", "min", "max", "median", "q1", "q3", "percentiles"],
+      "required": false,
+      "options": ["count", "mean", "std", "var", "min", "max", "median", "q1", "q3", "percentiles", "skew", "kurtosis", "sum"]
+    }
+  },
+  "output": {
+    "type": "json",
+    "includes": ["summary_table", "statistics_by_variable", "group_statistics"]
+  }
+}

@@ -5,7 +5,7 @@ Flask REST API 路由
 """
 from flask import Blueprint, request, jsonify
 from typing import Dict, Any
-from core.executor import get_executor
+from core.simple_agent_executor import get_simple_executor
 from core.agent_manager import AgentManager
 from core.skill_manager import SkillManager
 from vector_db.chroma_store import get_vector_store
@@ -22,7 +22,7 @@ logger = get_logger(__name__)
 api_bp = Blueprint('api', __name__, url_prefix='/v1')
 
 # 初始化组件
-executor = get_executor()
+simple_executor = get_simple_executor()
 agent_manager = AgentManager()
 skill_manager = SkillManager()
 vector_store = None
@@ -196,14 +196,14 @@ def unified_chat():
             **context
         }
 
-        routing_result = executor.execute_agent('routing-agent', routing_input)
+        routing_result = simple_executor.execute('routing-agent', routing_input)
 
         if DEBUG_MODE:
             print(f"Routing response:")
-            print(f"   {routing_result.response[:300]}...")
+            print(f"   {routing_result.get('response', '')[:300]}...")
 
         agent_used = "routing-agent"
-        response = routing_result.response
+        response = routing_result.get("response", "")
 
         debug_info["steps"].append({"step": "routing", "time": time.time() - step3_start})
         debug_info["agents_called"].append("routing-agent")
@@ -249,8 +249,8 @@ def unified_chat():
                     if search_results:
                         agent_input["knowledge_context"] = search_results
 
-                    target_result = executor.execute_agent(target, agent_input)
-                    response = target_result.response
+                    target_result = simple_executor.execute(target, agent_input)
+                    response = target_result.get("response", "")
                     agent_used = target
 
                     if DEBUG_MODE:
@@ -319,14 +319,14 @@ def execute_agent_route(agent_name: str):
             print(f"🔧 DIRECT AGENT EXECUTION: {agent_name}")
             print(f"{'-'*70}")
 
-        result = executor.execute_agent(agent_name, input_data)
+        result = simple_executor.execute(agent_name, input_data)
 
         if DEBUG_MODE:
             print(f"✓ Execution complete")
 
         return jsonify({
-            "success": result.success,
-            "data": result.to_dict()
+            "success": result.get("success", False),
+            "data": result
         })
     except Exception as e:
         logger.error(f"Error in execute_agent: {e}")

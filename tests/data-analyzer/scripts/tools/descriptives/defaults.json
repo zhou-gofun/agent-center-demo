@@ -1,0 +1,6 @@
+{
+  "variables": "all_numeric",
+  "group_by": null,
+  "percentiles": [25, 50, 75, 90, 95, 99],
+  "include": ["count", "mean", "std", "min", "max", "median", "q1", "q3"]
+}

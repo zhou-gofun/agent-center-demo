@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 
 from core.execution_context import ExecutionContext
-from core.execution_orchestrator import ExecutionOrchestrator
+from core.simple_agent_executor import SimpleAgentExecutor
 from core.task_parser import ActionType
 from utils.logger import get_logger
 
@@ -58,14 +58,14 @@ class ConversationalLoop:
     4. 状态跟踪和恢复
     """
 
-    def __init__(self, orchestrator: Optional[ExecutionOrchestrator] = None):
+    def __init__(self, executor: Optional[SimpleAgentExecutor] = None):
         """
         初始化
 
         Args:
-            orchestrator: 执行编排器
+            executor: 简洁执行器
         """
-        self.orchestrator = orchestrator
+        self.executor = executor
         self.sessions: Dict[str, LoopContext] = {}
 
     def create_session(
@@ -143,11 +143,11 @@ class ConversationalLoop:
                 context.pending_question = ""
 
             # 执行 agent
-            if not self.orchestrator:
-                from core.execution_orchestrator import get_orchestrator
-                self.orchestrator = get_orchestrator()
+            if not self.executor:
+                from core.simple_agent_executor import get_simple_executor
+                self.executor = get_simple_executor()
 
-            result = self.orchestrator.execute_agent(
+            result = self.executor.execute(
                 agent_name,
                 input_data,
                 context.execution_context
@@ -286,6 +286,6 @@ def get_conversational_loop() -> ConversationalLoop:
     """获取对话循环实例"""
     global _loop
     if _loop is None:
-        from core.execution_orchestrator import get_orchestrator
-        _loop = ConversationalLoop(orchestrator=get_orchestrator())
+        from core.simple_agent_executor import get_simple_executor
+        _loop = ConversationalLoop(executor=get_simple_executor())
     return _loop

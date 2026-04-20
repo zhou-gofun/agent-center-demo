@@ -8,7 +8,7 @@ sys.path.insert(0, '/mnt/d/temp/proj/agent_center')
 
 from src.core.execution_context import ExecutionContext
 from src.core.task_parser import TaskParser, ActionType
-from src.core.execution_orchestrator import get_orchestrator
+from src.core.simple_agent_executor import get_simple_executor
 from src.core.conversational_loop import get_conversational_loop
 
 
@@ -85,11 +85,11 @@ def test_agent_execution():
     print("Test: Agent Execution")
     print("=" * 50)
 
-    orchestrator = get_orchestrator()
+    executor = get_simple_executor()
 
     # 测试 routing-agent
     print("Testing routing-agent...")
-    result = orchestrator.execute_agent(
+    result = executor.execute(
         "routing-agent",
         {"query": "I need help with statistical analysis"}
     )

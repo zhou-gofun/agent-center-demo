@@ -1,0 +1,53 @@
+{
+  "name": "violin",
+  "description": "生成小提琴图（Violin Plot），用于可视化数值变量的分布，特别是按分组变量对比时",
+  "when_to_use": [
+    "需要可视化数值变量的分布形状",
+    "需要按分类变量分组比较分布",
+    "探索数据的多峰分布特征",
+    "比较不同组别的数据分布差异"
+  ],
+  "data_requirements": {
+    "min_columns": 2,
+    "column_types": ["numeric", "categorical"],
+    "min_rows": 5
+  },
+  "parameters": {
+    "variable": {
+      "type": "string",
+      "description": "要绘制的小提琴图的数值变量",
+      "auto_detect": true,
+      "required": true
+    },
+    "group_by": {
+      "type": "string",
+      "description": "分组变量（分类变量）",
+      "suggest_if": "categorical_found",
+      "required": false
+    },
+    "orientation": {
+      "type": "string",
+      "description": "图表方向",
+      "default": "vertical",
+      "options": ["vertical", "horizontal"],
+      "required": false
+    },
+    "include_boxplot": {
+      "type": "boolean",
+      "description": "是否在小提琴图内叠加箱线图",
+      "default": true,
+      "required": false
+    },
+    "output_format": {
+      "type": "string",
+      "description": "输出格式",
+      "default": "json",
+      "options": ["json", "plotly", "matplotlib"],
+      "required": false
+    }
+  },
+  "output": {
+    "type": "json",
+    "includes": ["plot_data", "statistics", "distribution_summary"]
+  }
+}
