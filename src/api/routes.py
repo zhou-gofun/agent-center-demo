@@ -1,469 +1,323 @@
 """
-Flask REST API 路由
-
-提供 Agent 中心的 HTTP API 接口（带调试追踪）
+Flask REST API routes for Agent Center.
 """
-from flask import Blueprint, request, jsonify
-from typing import Dict, Any
-from core.simple_agent_executor import get_simple_executor
+from __future__ import annotations
+
+import json
+import re
+import time
+from typing import Any, Dict, List
+
+from flask import Blueprint, jsonify, request
+
+from api.response_utils import error_response, success_response
 from core.agent_manager import AgentManager
+from core.registry_scanner import get_scanner
+from core.simple_agent_executor import get_simple_executor
 from core.skill_manager import SkillManager
+from utils.logger import get_logger
 from vector_db.chroma_store import get_vector_store
 from vector_db.embeddings import get_embedding_function
-from vector_db.data_loader import get_assembly_loader, get_literature_loader
-from utils.logger import get_logger
-from utils.debug import log_agent_execution, enable_debug_mode
 
 logger = get_logger(__name__)
 
+api_bp = Blueprint("api", __name__, url_prefix="/v1")
 
-
-# 创建蓝图
-api_bp = Blueprint('api', __name__, url_prefix='/v1')
-
-# 初始化组件
 simple_executor = get_simple_executor()
 agent_manager = AgentManager()
 skill_manager = SkillManager()
+registry_scanner = get_scanner()
 vector_store = None
 
-# 调试模式开关
-DEBUG_MODE = True  # 设置为 True 启用详细日志
+DEBUG_MODE = True
+
+
+def _get_json_payload() -> Dict[str, Any]:
+    payload = request.get_json(silent=True)
+    return payload if isinstance(payload, dict) else {}
 
 
 def get_vector_db():
-    """获取向量数据库实例（懒加载）"""
+    """Return a lazily initialized vector DB client."""
+
     global vector_store
     if vector_store is None:
-        from vector_db.chroma_store import get_vector_store as _get_store
-        from vector_db.embeddings import get_embedding_function
-        vector_store = _get_store()
-        # 初始化集合
+        vector_store = get_vector_store()
         embedding_fn = get_embedding_function()
-        # 创建默认集合
         for collection_name in ["assembly_tools", "literature"]:
             if collection_name not in vector_store.list_collections():
                 vector_store.create_collection(collection_name, embedding_fn)
     return vector_store
 
 
-# ==================== 统一聊天接口（唯一对外接口）====================
+def _build_debug_info() -> Dict[str, Any]:
+    return {"steps": [], "timing": {}, "agents_called": []}
 
-@api_bp.route('/chat', methods=['POST'])
-def unified_chat():
-    """
-    统一聊天接口 - 项目唯一对外暴露的入口
 
-    外部只需传入上下文和问题，系统自动处理
+def _extract_route_json(response: str) -> Dict[str, Any]:
+    json_match = (
+        re.search(r"```json\s*(\{.*?\})\s*```", response, re.DOTALL)
+        or re.search(r"\{[^{}]*\"target\"[^{}]*\"action\"[^{}]*\}", response, re.DOTALL)
+        or re.search(r"\{[^{}]*\"action\"[^{}]*\"target\"[^{}]*\}", response, re.DOTALL)
+    )
+    if not json_match:
+        return {}
 
-    Request:
-    {
-      "query": "用户问题",
-      "context": {
-        "data_summary": "数据摘要",
-        "user_id": "用户ID",
-        ...其他自定义上下文
-      }
-    }
+    json_str = json_match.group(1) if json_match.lastindex else json_match.group()
+    try:
+        return json.loads(json_str)
+    except json.JSONDecodeError:
+        return {}
 
-    Response:
-    {
-      "success": true,
-      "data": {
-        "response": "处理结果",
-        "agent_used": "实际调用的agent",
-        "execution_time": 1.23,
-        "debug": {...}  # 调试信息（如果启用）
-      }
-    }
-    """
-    import time
-    import re
-    import json
 
-    # 调试信息收集
-    debug_info = {
-        "steps": [],
-        "timing": {},
-        "agents_called": []
-    }
+def _search_knowledge(query: str, enable_search: bool = True) -> List[Dict[str, Any]]:
+    if not enable_search:
+        return []
 
     try:
-        query = request.json.get('query', '')
-        context = request.json.get('context', {})
+        db = get_vector_db()
+        search_results: List[Dict[str, Any]] = []
+        for collection in db.list_collections():
+            try:
+                search_results.extend(db.search(collection, query, top_k=3))
+            except Exception as exc:
+                logger.warning("Knowledge search failed for %s: %s", collection, exc)
+
+        search_results.sort(key=lambda item: item.get("score", 0), reverse=True)
+        return search_results[:5]
+    except Exception as exc:
+        logger.warning("Knowledge base search unavailable: %s", exc)
+        return []
+
+
+@api_bp.route("/chat", methods=["POST"])
+def unified_chat():
+    """Unified chat endpoint with routing and optional knowledge search."""
+
+    debug_info = _build_debug_info()
+
+    try:
+        payload = _get_json_payload()
+        query = payload.get("query", "")
+        context = dict(payload.get("context", {}) or {})
 
         if not query:
-            return jsonify({
-                "success": False,
-                "error": "Missing 'query' field"
-            }), 400
+            body, status = error_response("Missing 'query' field", 400, code="missing_query")
+            return jsonify(body), status
 
         request_start = time.time()
-
-        # ========== 步骤 1: 请求接收与预处理 ==========
-        if DEBUG_MODE:
-            print(f"\n{'-'*70}")
-            print(f"📥 REQUEST RECEIVED")
-            print(f"{'-'*70}")
-            print(f"Query: {query}")
-            print(f"Context keys: {list(context.keys())}")
-
-        debug_info["steps"].append({"step": "request_received", "time": 0})
-        step1_time = time.time()
-
-        # 处理对话历史
-        conversation_history = context.pop('conversation_history', [])
-        history_context = ""
+        conversation_history = context.pop("conversation_history", [])
         raw_history = ""
         if conversation_history:
-            if DEBUG_MODE:
-                print(f"📜 Conversation history: {len(conversation_history)} messages")
-
-            # ===== 清理对话历史中的重复问候 =====
-            cleaned_history = []
-            greeting_count = 0
-            for msg in conversation_history:
-                content = msg.get('content', '').strip()
-                content_lower = content.lower()
-
-                # 跳过重复的问候
-                if any(g in content_lower for g in ["哈喽", "你好", "hello", "嗨", "您好"]):
-                    greeting_count += 1
-                    if greeting_count > 1:  # 跳过第2个及以后的问候
-                        continue
-
-                cleaned_history.append(msg)
-
-            if DEBUG_MODE and greeting_count > 1:
-                print(f"🧹 Cleaned {greeting_count - 1} repetitive greetings")
-
-            # 格式化对话历史供 agent 参考
-            history_items = []
             raw_items = []
-            for msg in cleaned_history[-8:]:  # 保留最近8条
-                role = msg.get('role', 'user')
-                content = msg.get('content', '')
-                history_items.append(f"{role}: {content[:300]}")  # 摘要
-                raw_items.append(f"{role}: {content}")  # 完整内容
-            history_context = "对话摘要：\n" + "\n".join(history_items) + "\n\n"
-            raw_history = "完整对话历史：\n" + "\n".join(raw_items) + "\n\n"
+            for message in conversation_history[-8:]:
+                role = message.get("role", "user")
+                content = message.get("content", "")
+                raw_items.append(f"{role}: {content}")
+            raw_history = "Conversation history:\n" + "\n".join(raw_items) + "\n\n"
 
-        # ========== 步骤 2: 知识库搜索 ==========
-        step2_start = time.time()
-        search_results = []
-        if context.get('enable_search', True):
-            if DEBUG_MODE:
-                print(f"🔍 Searching knowledge base...")
-
-            try:
-                db = get_vector_db()
-                collections = db.list_collections()
-                if DEBUG_MODE:
-                    print(f"   Collections: {collections}")
-
-                for collection in collections:
-                    try:
-                        results = db.search(collection, query, top_k=3)
-                        search_results.extend(results)
-                        if DEBUG_MODE and results:
-                            print(f"   {collection}: {len(results)} results")
-                    except Exception as e:
-                        if DEBUG_MODE:
-                            print(f"   {collection} search failed: {e}")
-                search_results.sort(key=lambda x: x.get('score', 0), reverse=True)
-                search_results = search_results[:5]
-
-                if DEBUG_MODE:
-                    print(f"✓ Total search results: {len(search_results)}")
-            except Exception as e:
-                if DEBUG_MODE:
-                    print(f"✗ Search failed: {e}")
-
-        debug_info["steps"].append({"step": "knowledge_search", "time": time.time() - step2_start})
+        step_start = time.time()
+        search_results = _search_knowledge(query, enable_search=context.get("enable_search", True))
+        debug_info["steps"].append({"step": "knowledge_search", "time": time.time() - step_start})
         debug_info["search_results_count"] = len(search_results)
 
-        # ========== 步骤 3: 路由决策 ==========
-        step3_start = time.time()
-
-        if DEBUG_MODE:
-            print(f"\n🔀 ROUTING DECISION")
-            print(f"{'─'*40}")
-
         routing_input = {
-            "query": raw_history + query,  # 使用完整历史
-            "conversation_history": conversation_history,  # 传递原始对话历史
+            "query": raw_history + query,
+            "conversation_history": conversation_history,
             "knowledge_results": search_results[:2],
-            **context
+            **context,
         }
 
-        routing_result = simple_executor.execute('routing-agent', routing_input)
-
-        if DEBUG_MODE:
-            print(f"Routing response:")
-            print(f"   {routing_result.get('response', '')[:300]}...")
-
-        agent_used = "routing-agent"
-        response = routing_result.get("response", "")
-
-        debug_info["steps"].append({"step": "routing", "time": time.time() - step3_start})
+        step_start = time.time()
+        routing_result = simple_executor.execute("routing-agent", routing_input)
+        debug_info["steps"].append({"step": "routing", "time": time.time() - step_start})
         debug_info["agents_called"].append("routing-agent")
 
-        # ========== 步骤 4: 解析路由并调用目标 agent ==========
-        step4_start = time.time()
-        target_agent = None
+        response = routing_result.get("response", "")
+        agent_used = "routing-agent"
+        route_info = _extract_route_json(response)
 
-        try:
-            # 尝试多种 JSON 提取模式
-            json_match = (
-                re.search(r'```json\s*(\{.*?\})\s*```', response, re.DOTALL) or
-                re.search(r'\{[^{}]*"target"[^{}]*"action"[^{}]*\}', response, re.DOTALL) or
-                re.search(r'\{[^{}]*"action"[^{}]*"target"[^{}]*\}', response, re.DOTALL)
-            )
+        step_start = time.time()
+        target = route_info.get("target")
+        action = route_info.get("action")
+        if action == "route_to_agent" and target and target != "direct_response":
+            agent_input = {
+                "query": raw_history + query,
+                "conversation_history": conversation_history,
+                **context,
+            }
+            if search_results:
+                agent_input["knowledge_context"] = search_results
 
-            if json_match:
-                json_str = json_match.group(1) if json_match.lastindex else json_match.group()
-                route_info = json.loads(json_str)
-                target = route_info.get("target")
-                action = route_info.get("action")
+            target_result = simple_executor.execute(target, agent_input)
+            response = target_result.get("response", "")
+            agent_used = target
+            debug_info["agents_called"].append(target)
 
-                if DEBUG_MODE:
-                    print(f"\n🎯 Parsed routing decision:")
-                    print(f"   Action: {action}")
-                    print(f"   Target: {target}")
-                    print(f"   Reasoning: {route_info.get('reasoning', 'N/A')}")
+        debug_info["steps"].append({"step": "target_execution", "time": time.time() - step_start})
 
-                if action == "route_to_agent" and target and target != "direct_response":
-                    # 自动路由到目标 agent（包含完整对话历史）
-                    target_agent = target
-
-                    if DEBUG_MODE:
-                        print(f"\n{'-'*70}")
-                        print(f"🚀 CALLING TARGET AGENT: {target}")
-                        print(f"{'-'*70}")
-
-                    agent_input = {
-                        "query": raw_history + query,  # 使用完整历史
-                        "conversation_history": conversation_history,  # 传递原始历史
-                        **context
-                    }
-                    if search_results:
-                        agent_input["knowledge_context"] = search_results
-
-                    target_result = simple_executor.execute(target, agent_input)
-                    response = target_result.get("response", "")
-                    agent_used = target
-
-                    if DEBUG_MODE:
-                        print(f"\n✓ Target agent response received")
-                        print(f"   Response length: {len(response)} chars")
-
-                    debug_info["agents_called"].append(target)
-
-        except Exception as e:
-            if DEBUG_MODE:
-                print(f"✗ Routing parse failed: {e}")
-            logger.debug(f"Routing parse failed: {e}")
-
-        debug_info["steps"].append({"step": "target_execution", "time": time.time() - step4_start})
-
-        # ========== 步骤 5: 最终响应 ==========
-        execution_time = time.time() - request_start
-
-        if DEBUG_MODE:
-            print(f"\n{'-'*70}")
-            print(f"✅ REQUEST COMPLETE")
-            print(f"{'-'*70}")
-            print(f"Agent used: {agent_used}")
-            print(f"Total time: {execution_time:.3f}s")
-            print(f"Agents called: {' → '.join(debug_info['agents_called'])}")
-            print(f"{'-'*70}\n")
-
-        result_data = {
+        result = {
             "response": response,
             "agent_used": agent_used,
-            "execution_time": round(execution_time, 2)
+            "execution_time": round(time.time() - request_start, 2),
         }
-
-        # 添加调试信息（如果启用）
         if DEBUG_MODE:
-            result_data["debug"] = debug_info
+            result["debug"] = debug_info
 
-        return jsonify({
-            "success": True,
-            "data": result_data
-        })
+        body, status = success_response(result)
+        return jsonify(body), status
 
-    except Exception as e:
-        logger.error(f"Error in unified_chat: {e}")
-        if DEBUG_MODE:
-            import traceback
-            print(f"\n❌ ERROR: {e}")
-            traceback.print_exc()
-
-        return jsonify({
-            "success": False,
-            "error": str(e)
-        }), 500
+    except Exception as exc:
+        logger.error("Error in unified_chat: %s", exc)
+        body, status = error_response(str(exc), 500, code="chat_execution_failed")
+        return jsonify(body), status
 
 
-# ==================== Agent 执行接口 ====================
-
-@api_bp.route('/agent/<agent_name>/execute', methods=['POST'])
+@api_bp.route("/agent/<agent_name>/execute", methods=["POST"])
 def execute_agent_route(agent_name: str):
-    """直接执行指定的 agent（调试用）"""
+    """Direct agent execution endpoint."""
+
     try:
-        input_data = request.json.get('input', {})
-
-        if DEBUG_MODE:
-            print(f"\n{'-'*70}")
-            print(f"🔧 DIRECT AGENT EXECUTION: {agent_name}")
-            print(f"{'-'*70}")
-
+        payload = _get_json_payload()
+        input_data = payload.get("input", {})
         result = simple_executor.execute(agent_name, input_data)
 
-        if DEBUG_MODE:
-            print(f"✓ Execution complete")
+        if result.get("success", False):
+            body, status = success_response(result)
+            return jsonify(body), status
 
-        return jsonify({
-            "success": result.get("success", False),
-            "data": result
-        })
-    except Exception as e:
-        logger.error(f"Error in execute_agent: {e}")
-        return jsonify({
-            "success": False,
-            "error": str(e)
-        }), 500
+        error_text = result.get("error", "Agent execution failed")
+        body, status = error_response(
+            error_text,
+            404 if "not found" in error_text.lower() else 400,
+            code="agent_execution_failed",
+            details=result,
+        )
+        return jsonify(body), status
+    except Exception as exc:
+        logger.error("Error in execute_agent_route: %s", exc)
+        body, status = error_response(str(exc), 500, code="agent_route_failed")
+        return jsonify(body), status
 
 
-# ==================== 注册表管理接口 ====================
-
-@api_bp.route('/registry/agents', methods=['GET'])
+@api_bp.route("/registry/agents", methods=["GET"])
 def list_agents():
-    """列出所有 agents"""
     try:
-        agents = agent_manager.list_agents()
-        if DEBUG_MODE:
-            print(f"📋 Listing {len(agents)} agents")
-        return jsonify({
-            "success": True,
-            "data": agents
-        })
-    except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
+        body, status = success_response(agent_manager.list_agents())
+        return jsonify(body), status
+    except Exception as exc:
+        body, status = error_response(str(exc), 500, code="list_agents_failed")
+        return jsonify(body), status
 
 
-@api_bp.route('/registry/skills', methods=['GET'])
+@api_bp.route("/registry/skills", methods=["GET"])
 def list_skills():
-    """列出所有 skills"""
     try:
-        skills = skill_manager.list_skills()
-        if DEBUG_MODE:
-            print(f"📋 Listing {len(skills)} skills")
-        return jsonify({
-            "success": True,
-            "data": skills
-        })
-    except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
+        body, status = success_response(skill_manager.list_skills())
+        return jsonify(body), status
+    except Exception as exc:
+        body, status = error_response(str(exc), 500, code="list_skills_failed")
+        return jsonify(body), status
 
 
-# ==================== 知识库接口 ====================
+@api_bp.route("/registry/scan", methods=["GET"])
+def scan_registry():
+    """Scan registry and return validation report."""
 
-@api_bp.route('/knowledge/search', methods=['POST'])
+    try:
+        report = registry_scanner.scan()
+        result = {
+            "healthy": not report.get("errors"),
+            "agents_count": len(report.get("agents", {})),
+            "skills_count": len(report.get("skills", {})),
+            "agents": sorted(report.get("agents", {}).keys()),
+            "skills": sorted(report.get("skills", {}).keys()),
+            "errors": report.get("errors", []),
+        }
+        body, status = success_response(result)
+        return jsonify(body), status
+    except Exception as exc:
+        body, status = error_response(str(exc), 500, code="registry_scan_failed")
+        return jsonify(body), status
+
+
+@api_bp.route("/knowledge/search", methods=["POST"])
 def knowledge_search():
-    """知识库搜索"""
     try:
-        query = request.json.get('query', '')
-        collection = request.json.get('collection', 'assembly_tools')
-        top_k = request.json.get('top_k', 10)
+        payload = _get_json_payload()
+        query = payload.get("query", "")
+        collection = payload.get("collection", "assembly_tools")
+        top_k = payload.get("top_k", 10)
 
         if not query:
-            return jsonify({"success": False, "error": "Missing 'query'"}), 400
-
-        if DEBUG_MODE:
-            print(f"\n🔍 KNOWLEDGE SEARCH")
-            print(f"   Query: {query}")
-            print(f"   Collection: {collection}")
-            print(f"   Top-K: {top_k}")
+            body, status = error_response("Missing 'query'", 400, code="missing_query")
+            return jsonify(body), status
 
         db = get_vector_db()
         collection_map = {"assembly": "assembly_tools", "literature": "literature"}
         collection_name = collection_map.get(collection, collection)
-
         results = db.search(collection_name, query, top_k=top_k)
 
-        if DEBUG_MODE:
-            print(f"   Results: {len(results)} items")
-            for r in results[:3]:
-                score = r.get("score", 0)
-                name = r.get("metadata", {}).get("toolname", r.get("title", "N/A"))
-                print(f"      - {name} ({score:.2f})")
-
-        return jsonify({
-            "success": True,
-            "data": results
-        })
-    except Exception as e:
-        if DEBUG_MODE:
-            print(f"✗ Search failed: {e}")
-        return jsonify({"success": False, "error": str(e)}), 500
+        body, status = success_response(results)
+        return jsonify(body), status
+    except Exception as exc:
+        body, status = error_response(str(exc), 500, code="knowledge_search_failed")
+        return jsonify(body), status
 
 
-# ==================== 调试控制接口 ====================
-
-@api_bp.route('/debug/toggle', methods=['POST'])
+@api_bp.route("/debug/toggle", methods=["POST"])
 def toggle_debug():
-    """切换调试模式"""
     global DEBUG_MODE
     DEBUG_MODE = not DEBUG_MODE
-    return jsonify({
-        "success": True,
-        "data": {"debug_mode": DEBUG_MODE}
-    })
+    body, status = success_response({"debug_mode": DEBUG_MODE})
+    return jsonify(body), status
 
 
-@api_bp.route('/debug/status', methods=['GET'])
+@api_bp.route("/debug/status", methods=["GET"])
 def debug_status():
-    """获取调试状态"""
-    return jsonify({
-        "success": True,
-        "data": {
-            "debug_mode": DEBUG_MODE,
-            "log_level": "DEBUG" if DEBUG_MODE else "INFO"
-        }
-    })
+    body, status = success_response(
+        {"debug_mode": DEBUG_MODE, "log_level": "DEBUG" if DEBUG_MODE else "INFO"}
+    )
+    return jsonify(body), status
 
 
-# ==================== 健康检查 ====================
-
-@api_bp.route('/health', methods=['GET'])
+@api_bp.route("/health", methods=["GET"])
 def health_check():
-    """健康检查"""
-    return jsonify({
-        "status": "healthy",
-        "service": "agent-center",
-        "debug_mode": DEBUG_MODE
-    })
+    scan_report = registry_scanner.get_last_scan_report()
+    errors = scan_report.get("errors", [])
+    body, status = success_response(
+        {
+            "status": "healthy" if not errors else "degraded",
+            "service": "agent-center",
+            "debug_mode": DEBUG_MODE,
+            "registry": {
+                "agents_count": len(scan_report.get("agents", {})),
+                "skills_count": len(scan_report.get("skills", {})),
+                "errors_count": len(errors),
+            },
+        }
+    )
+    return jsonify(body), status
 
 
-@api_bp.route('/info', methods=['GET'])
+@api_bp.route("/info", methods=["GET"])
 def service_info():
-    """服务信息"""
     try:
         agents = agent_manager.list_agents()
         skills = skill_manager.list_skills()
-
-        return jsonify({
-            "success": True,
-            "data": {
+        scan_report = registry_scanner.get_last_scan_report()
+        body, status = success_response(
+            {
                 "version": "1.0.0",
                 "debug_mode": DEBUG_MODE,
                 "agents_count": len(agents),
                 "skills_count": len(skills),
-                "agents": [a["name"] for a in agents],
-                "skills": [s["name"] for s in skills]
+                "agents": [item["name"] for item in agents],
+                "skills": [item["name"] for item in skills],
+                "registry_errors": scan_report.get("errors", []),
             }
-        })
-    except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
+        )
+        return jsonify(body), status
+    except Exception as exc:
+        body, status = error_response(str(exc), 500, code="service_info_failed")
+        return jsonify(body), status
