@@ -242,3 +242,7 @@ LLM_KEY=your-key
 LLM_URL=https://your-api-endpoint/v1
 LLM_MODEL=your-model-name
 ```
+
+## TODO
+
+- [ ] 上下文管理：主 agent 与 subagent 独立
